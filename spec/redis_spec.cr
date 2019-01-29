@@ -1528,10 +1528,7 @@ describe Redis do
 
     stream = "my_stream"
     other_stream = "other_stream"
-
     group = "my_group"
-    other_group = "other_group"
-
     consumer = "my_consumer"
     other_consumer = "other_consumer"
 
@@ -1545,20 +1542,9 @@ describe Redis do
     v4, v4_id = {"v" => "v4"}, "4-1"
     v5, v5_id = {"v" => "v5"}, "5-1"
 
-    Spec.before_each do
-      [stream, other_stream].each do |strm|
-        [group, other_group].each do |grp|
-          begin
-            redis.xgroup :destroy, strm, grp
-          rescue Redis::Error
-            # nothing to do here
-          end
-        end
-        redis.del strm
-      end
-    end
+    entry_id_format = /\d+-\d+/
 
-    context "#info" do
+    context "#xinfo" do
       it "stream (missing)" do
         redis.del(stream)
         expect_raises(Redis::Error, "ERR no such key") { redis.xinfo("stream", stream) }
@@ -1566,7 +1552,7 @@ describe Redis do
 
       it "stream (found)" do
         redis.del stream
-        redis.xadd stream, entry, sel_id
+        redis.xadd stream, entry, id: sel_id
 
         result = redis.xinfo "stream", stream
 
@@ -1592,22 +1578,58 @@ describe Redis do
       end
     end
 
+    context "#xadd" do
+      it "hash literal" do
+        stream = "add_literal"
+        redis.xadd(stream, v1).should match entry_id_format
+      end
+
+      it "with id" do
+        stream = "add_id"
+        redis.xadd(stream, v1, id: v1_id).should eq v1_id
+      end
+
+      it "with invalid id" do
+        msg = "ERR Invalid stream ID specified as stream command argument"
+        expect_raises(Redis::Error, msg) { redis.xadd stream, v1, id: "invalid-format-entry-id" }
+      end
+
+      it "with old id" do
+        stream = "add_old"
+        msg = "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+        redis.xadd stream, v2, id: v2_id
+        expect_raises(Redis::Error, msg) { redis.xadd stream, v1, id: v1_id }
+      end
+
+      it "with maxlen and approximate" do
+        stream = "add_max_and_approx"
+        redis.xadd(stream, v1, maxlen: 2, approximate: true).should match entry_id_format
+      end
+
+      it "with invalid args" do
+        empty = Hash(String, String).new
+        expect_raises(Redis::Error) { redis.xadd nil, empty }
+        expect_raises(Redis::Error) { redis.xadd "", empty }
+        expect_raises(Redis::Error) { redis.xadd stream, empty }
+      end
+    end
+
     context "#xtrim" do
       it "basic" do
         redis.del stream
-        redis.xadd stream, v1
-        redis.xadd stream, v2
-        redis.xadd stream, v3
-        redis.xadd stream, v4
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
+        redis.xadd stream, v4, id: v4_id
         redis.xtrim(stream, 2).should eq 2
       end
 
       it "approximate" do
         redis.del stream
-        redis.xadd stream, v1
-        redis.xadd stream, v2
-        redis.xadd stream, v3
-        redis.xadd stream, v4
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
+        redis.xadd stream, v4, id: v4_id
         redis.xtrim(stream, 2, true).should eq 0
       end
 
@@ -1627,22 +1649,22 @@ describe Redis do
     context "#xdel" do
       it "splatted ids" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
         redis.xdel(stream, v1_id, v2_id, v3_id).should eq 2
       end
 
       it "array ids" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
         redis.xdel(stream, [v1_id, v2_id, v3_id]).should eq 2
       end
 
-      # it "invalid ids" do
-      #   msg = "ERR Invalid stream ID specified as stream command argument"
-      #   expect_raises(Redis::Error, msg) { redis.xdel(stream, "invalid_format") }
-      # end
+      it "invalid ids" do
+        msg = "ERR Invalid stream ID specified as stream command argument"
+        expect_raises(Redis::Error, msg) { redis.xdel(stream, "invalid_format") }
+      end
 
       it "invalid args" do
         redis.del stream
@@ -1656,9 +1678,9 @@ describe Redis do
     context "#xrange" do
       it "basic" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         result = redis.xrange(stream)
 
@@ -1671,45 +1693,45 @@ describe Redis do
 
       it "start" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrange(stream, v2_id).values.map { |v| v["v"] }.should eq %w{v2 v3}
       end
 
       it "end" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrange(stream, _end: v2_id).values.map { |v| v["v"] }.should eq %w{v1 v2}
       end
 
       it "start and end" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrange(stream, v2_id, v2_id).values.map { |v| v["v"] }.should eq %w{v2}
       end
 
       it "count" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrange(stream, count: 2).values.map { |v| v["v"] }.should eq %w{v1 v2}
       end
 
       it "incomplete ids" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrange(stream, '1', '2').values.map { |v| v["v"] }.should eq %w{v1 v2}
       end
@@ -1732,54 +1754,54 @@ describe Redis do
     context "#xrevrange" do
       it "basic" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrevrange(stream).values.map { |v| v["v"] }.should eq %w{v3 v2 v1}
       end
 
       it "start" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrevrange(stream, start: v2_id).values.map { |v| v["v"] }.should eq %w{v3 v2}
       end
 
       it "end" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrevrange(stream, v2_id).values.map { |v| v["v"] }.should eq %w{v2 v1}
       end
 
       it "start and end" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrevrange(stream, v2_id, v2_id).values.map { |v| v["v"] }.should eq %w{v2}
       end
 
       it "count" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrevrange(stream, count: 2).values.map { |v| v["v"] }.should eq %w{v3 v2}
       end
 
       it "incomplete ids" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         redis.xrevrange(stream, '2', '1').values.map { |v| v["v"] }.should eq %w{v2 v1}
       end
@@ -1802,8 +1824,8 @@ describe Redis do
     context "#xlen" do
       it "basic" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
 
         redis.xlen(stream).should eq 2
       end
@@ -1821,8 +1843,8 @@ describe Redis do
     context "#xread" do
       it "single stream" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
 
         result = redis.xread(stream, 0)
 
@@ -1833,10 +1855,10 @@ describe Redis do
 
       it "multiple streams/keys" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
-        redis.xadd other_stream, v3, v3_id
-        redis.xadd other_stream, v4, v4_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd other_stream, v3, id: v3_id
+        redis.xadd other_stream, v4, id: v4_id
 
         result = redis.xread([stream, other_stream], [v1_id, v3_id])
 
@@ -1848,8 +1870,8 @@ describe Redis do
 
       it "count" do
         redis.del stream
-        redis.xadd stream, v1, v1_id
-        redis.xadd stream, v2, v2_id
+        redis.xadd stream, v1, id: v1_id
+        redis.xadd stream, v2, id: v2_id
 
         result = redis.xread(stream, 1, count: 1)
 
@@ -1878,7 +1900,7 @@ describe Redis do
       context ":create" do
         it "basic" do
           redis.del stream
-          redis.xadd stream, v1, v1_id
+          redis.xadd stream, v1, id: v1_id
 
           redis.xgroup(:create, stream, group, "$").should eq "OK"
         end
@@ -1895,7 +1917,7 @@ describe Redis do
 
         it "existing" do
           grp = (%w{a b c}.shuffle + %w{1 2 3 4 5 6}.shuffle).join
-          redis.xadd stream, v1, v1_id
+          redis.xadd stream, v1, id: v1_id
           redis.xgroup(:create, stream, grp, "$").should eq "OK"
 
           msg = "BUSYGROUP Consumer Group name already exists"
@@ -1906,7 +1928,7 @@ describe Redis do
         it "basic" do
           redis.del stream
 
-          redis.xadd stream, v1, v1_id
+          redis.xadd stream, v1, id: v1_id
           redis.xgroup(:create, stream, group, "$")
           redis.xgroup(:setid, stream, group, 0).should eq "OK"
         end
@@ -1915,7 +1937,7 @@ describe Redis do
         it "basic" do
           redis.del stream
 
-          redis.xadd stream, v1, v1_id
+          redis.xadd stream, v1, id: v1_id
           redis.xgroup(:create, stream, group, "$")
           redis.xgroup(:destroy, stream, group).should eq 1
         end
@@ -1924,7 +1946,7 @@ describe Redis do
         it "basic" do
           redis.del stream
 
-          redis.xadd stream, v1, v1_id
+          redis.xadd stream, v1, id: v1_id
           redis.xgroup(:create, stream, group, "$")
           redis.xgroup(:delconsumer, stream, group, consumer).should eq 0
         end
@@ -1933,10 +1955,12 @@ describe Redis do
 
     context "#xreadgroup" do
       it "single key" do
-        redis.xadd stream, v1, v1_id
+        stream = "read_group_single"
+
+        redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         result = redis.xreadgroup(group, consumer, stream, ">")
 
@@ -1946,6 +1970,8 @@ describe Redis do
       end
 
       it "multiple keys" do
+        stream = "read_group_multiple"
+
         redis.xadd stream, v1
         redis.xgroup :create, stream, group, "$"
         redis.xadd other_stream, v3
@@ -1962,10 +1988,12 @@ describe Redis do
       end
 
       it "count" do
-        redis.xadd stream, v1, v1_id
+        stream = "read_group_count"
+
+        redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         result = redis.xreadgroup(group, consumer, stream, ">", count: 1)
 
@@ -1975,10 +2003,12 @@ describe Redis do
       end
 
       it "noack" do
-        redis.xadd stream, v1, v1_id
+        stream = "read_group_noack"
+
+        redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
-        redis.xadd stream, v2, v2_id
-        redis.xadd stream, v3, v3_id
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
 
         result = redis.xreadgroup(group, consumer, stream, ">", noack: true)
 
@@ -1988,7 +2018,9 @@ describe Redis do
       end
 
       it "blocking" do
-        redis.xadd stream, v1, v1_id
+        stream = "read_group_blocking"
+
+        redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
 
         result = redis.xreadgroup(group, consumer, stream, ">", block: 300)
@@ -2006,6 +2038,8 @@ describe Redis do
 
     context "#xack" do
       it "single" do
+        stream = "ack_single"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2015,6 +2049,8 @@ describe Redis do
       end
 
       it "multiple" do
+        stream = "ack_multiple"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2035,6 +2071,8 @@ describe Redis do
 
     context "#xclaim" do
       it "splattered ids" do
+        stream = "claim_splattered"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2052,6 +2090,8 @@ describe Redis do
       end
 
       it "array ids" do
+        stream = "claim_array"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2069,6 +2109,8 @@ describe Redis do
       end
 
       it "idle" do
+        stream = "claim_idle"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2086,6 +2128,8 @@ describe Redis do
       end
 
       it "time" do
+        stream = "claim_time"
+
         time = Time.now.to_s("%s%L")
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
@@ -2104,6 +2148,8 @@ describe Redis do
       end
 
       it "retrycount" do
+        stream = "claim_retry"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2121,6 +2167,8 @@ describe Redis do
       end
 
       it "force" do
+        stream = "claim_force"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2138,6 +2186,8 @@ describe Redis do
       end
 
       it "justid" do
+        stream = "claim_justid"
+
         redis.xadd stream, v1, id: v1_id
         redis.xgroup :create, stream, group, "$"
         redis.xadd stream, v2, id: v2_id
@@ -2155,8 +2205,88 @@ describe Redis do
       end
     end
 
-    it "#xadd" do
-      redis.del(stream)
+    context "#xpending" do
+      context "basic" do
+        stream = "pending_basic"
+
+        redis.xadd stream, v1, id: v1_id
+        redis.xgroup :create, stream, group, "$"
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
+        redis.xreadgroup group, consumer, stream, ">"
+
+        result = redis.xpending stream, group
+
+        if result.is_a? Hash(String, Hash(String, String) | String)
+          result.keys.should eq %w{size min_entry_id max_entry_id consumers}
+          result["size"].should eq "2"
+          result["min_entry_id"].should eq v2_id
+          result["max_entry_id"].should eq v3_id
+          result["consumers"].should eq({consumer => "2"})
+        else
+          result.should be_a Hash(String, Hash(String, String) | String)
+        end
+      end
+
+      context "with range" do
+        stream = "pending_range"
+
+        redis.xadd stream, v1, id: v1_id
+        redis.xgroup :create, stream, group, "$"
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
+        redis.xreadgroup group, consumer, stream, ">"
+        redis.xadd stream, v4, id: v4_id
+        redis.xreadgroup group, other_consumer, stream, ">"
+
+        result = redis.xpending stream, group, "-", "+", 10
+
+        if result.is_a? Array(Hash(String, String))
+          result.size.should eq 3
+          result[0]["entry_id"].should eq v2_id
+          result[0]["consumer"].should eq consumer
+          result[0]["elapsed"].to_i.should be >= 0
+          result[0]["count"].should eq "1"
+          result[1]["entry_id"].should eq v3_id
+          result[1]["consumer"].should eq consumer
+          result[1]["elapsed"].to_i.should be >= 0
+          result[1]["count"].should eq "1"
+          result[2]["entry_id"].should eq v4_id
+          result[2]["consumer"].should eq other_consumer
+          result[2]["elapsed"].to_i.should be >= 0
+          result[2]["count"].should eq "1"
+        else
+          result.should be_a Array(Hash(String, String))
+        end
+      end
+
+      context "with range and consumer" do
+        stream = "pending_range_and_consumer"
+
+        redis.xadd stream, v1, id: v1_id
+        redis.xgroup :create, stream, group, "$"
+        redis.xadd stream, v2, id: v2_id
+        redis.xadd stream, v3, id: v3_id
+        redis.xreadgroup group, consumer, stream, ">"
+        redis.xadd stream, v4, id: v4_id
+        redis.xreadgroup group, other_consumer, stream, ">"
+
+        result = redis.xpending stream, group, "-", "+", 10, consumer
+
+        if result.is_a? Array(Hash(String, String))
+          result.size.should eq 2
+          result[0]["entry_id"].should eq v2_id
+          result[0]["consumer"].should eq consumer
+          result[0]["elapsed"].to_i.should be >= 0
+          result[0]["count"].should eq "1"
+          result[1]["entry_id"].should eq v3_id
+          result[1]["consumer"].should eq consumer
+          result[1]["elapsed"].to_i.should be >= 0
+          result[1]["count"].should eq "1"
+        else
+          result.should be_a Array(Hash(String, String))
+        end
+      end
     end
   end
 end
